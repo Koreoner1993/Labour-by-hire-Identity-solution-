@@ -427,13 +427,19 @@ class LBHIdentityService {
 
     const url = `${mirrorBase}/api/v1/accounts/${hederaAccountId}/nfts?token.id=${tid}`;
     const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`Mirror node error: ${res.status} ${res.statusText}`);
+    }
     const data = await res.json();
 
-    if (!data.nfts || data.nfts.length === 0) {
+    if (!Array.isArray(data.nfts) || data.nfts.length === 0) {
       return { verified: false, reason: "No LBH identity NFT found" };
     }
 
     const nft = data.nfts[0];
+    if (!nft.metadata) {
+      return { verified: false, reason: "NFT has no metadata" };
+    }
     const metadataUri = Buffer.from(nft.metadata, "base64").toString();
 
     // Fetch metadata from IPFS gateway
@@ -442,6 +448,9 @@ class LBHIdentityService {
       "https://nftstorage.link/ipfs/"
     );
     const metaRes = await fetch(ipfsGateway);
+    if (!metaRes.ok) {
+      throw new Error(`IPFS gateway error: ${metaRes.status} ${metaRes.statusText}`);
+    }
     const metadata = await metaRes.json();
 
     return {
