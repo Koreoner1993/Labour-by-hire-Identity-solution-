@@ -32,6 +32,8 @@ const {
 const { NFTStorage, File } = require("nft.storage");
 const crypto = require("crypto");
 
+const HEDERA_ACCOUNT_RE = /^\d+\.\d+\.\d+$/;
+
 // ─── SVG Avatar ─────────────────────────────────────────────────────────────
 
 const LBH_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
@@ -513,6 +515,44 @@ class LBHIdentityService {
 
     console.log(`[LBH] Labour Score updated to ${newScore} — serial ${newSerial}`);
     return { ...identity, nft_serial: newSerial, labour_score: newScore };
+  }
+
+  /**
+   * Fetch account details from the Hedera mirror node
+   * Returns balance, EVM address, key type, and metadata
+   */
+  async getAccountDetails(hederaAccountId) {
+    if (!HEDERA_ACCOUNT_RE.test(hederaAccountId)) {
+      throw new Error("Invalid Hedera account ID format (expected shard.realm.num)");
+    }
+
+    const network = process.env.HEDERA_NETWORK || "testnet";
+    const mirrorBase =
+      network === "mainnet"
+        ? "https://mainnet-public.mirrornode.hedera.com"
+        : "https://testnet.mirrornode.hedera.com";
+
+    const res = await fetch(`${mirrorBase}/api/v1/accounts/${hederaAccountId}`);
+    if (!res.ok) {
+      throw new Error(`Mirror node error: ${res.status} ${res.statusText}`);
+    }
+    const data = await res.json();
+
+    const TINYBARS_PER_HBAR = 100_000_000;
+    const balanceTinybars = data.balance?.balance ?? 0;
+
+    return {
+      account_id: data.account,
+      evm_address: data.evm_address || null,
+      balance_hbar: balanceTinybars / TINYBARS_PER_HBAR,
+      balance_tinybars: balanceTinybars,
+      key_type: data.key?._type || null,
+      key_hex: data.key?.key || null,
+      memo: data.memo || null,
+      created_timestamp: data.created_timestamp || null,
+      deleted: data.deleted ?? false,
+      tokens: data.balance?.tokens ?? [],
+    };
   }
 
   /**
