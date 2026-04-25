@@ -21,9 +21,11 @@ const {
   TokenAssociateTransaction,
   TransferTransaction,
   TokenFreezeTransaction,
+  TokenUnfreezeTransaction,
   TokenType,
   TokenSupplyType,
   CustomRoyaltyFee,
+  AccountCreateTransaction,
   Hbar,
 } = require("@hashgraph/sdk");
 
@@ -269,24 +271,14 @@ class HederaNFTService {
     await (await assocTx.execute(this.client)).getReceipt(this.client);
     console.log(`[LBH] Token associated with ${tradieAccountId}`);
 
-    // 2. Unfreeze the specific account temporarily to allow mint transfer
-    //    (treasury is exempt, but tradie account needs unfreeze for initial receive)
-    const unfreezeTx = await new TokenFreezeTransaction()
-      .setAccountId(tradieAccountId)
-      .setTokenId(this.tokenId)
-      .freezeWith(this.client)
-      .sign(this.operatorKey);
-    // Note: we actually need TokenUnfreezeTransaction for this step
-    // Using raw approach below for clarity
-    const { TokenUnfreezeTransaction } = require("@hashgraph/sdk");
-
-    const unfreezeActual = await new TokenUnfreezeTransaction()
+    // 2. Unfreeze the specific account temporarily to allow initial NFT transfer
+    const unfreezeTx = await new TokenUnfreezeTransaction()
       .setAccountId(tradieAccountId)
       .setTokenId(this.tokenId)
       .freezeWith(this.client)
       .sign(this.operatorKey);
 
-    await (await unfreezeActual.execute(this.client)).getReceipt(this.client);
+    await (await unfreezeTx.execute(this.client)).getReceipt(this.client);
 
     // 3. Transfer NFT from treasury to tradie
     const transferTx = await new TransferTransaction()
@@ -400,6 +392,9 @@ class LBHIdentityService {
 
     const identity = {
       tradie_id: tradie.id,
+      name: tradie.name,
+      abn: tradie.abn,
+      role: tradie.role,
       did,
       did_topic_id: topicId,
       hedera_account_id: tradieAccountId,
@@ -516,10 +511,6 @@ class LBHIdentityService {
    * Funded with minimum HBAR to cover token associations
    */
   async createDormantAccount(publicKey) {
-    const {
-      AccountCreateTransaction,
-    } = require("@hashgraph/sdk");
-
     const tx = await new AccountCreateTransaction()
       .setKey(publicKey)
       .setInitialBalance(new Hbar(1)) // ~0.13 AUD — covers associations
