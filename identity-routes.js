@@ -129,6 +129,28 @@ router.post("/score", async (req, res) => {
 });
 
 /**
+ * GET /api/identity/account/:accountId
+ * Display account details — balance, EVM address, key type, metadata
+ * Fetches live data from the Hedera mirror node.
+ */
+router.get("/account/:accountId", async (req, res) => {
+  try {
+    const { accountId } = req.params;
+
+    if (!HEDERA_ACCOUNT_RE.test(accountId)) {
+      return res.status(400).json({ error: "accountId must be a valid Hedera account (e.g. 0.0.12345)" });
+    }
+
+    const svc = getService();
+    const details = await svc.getAccountDetails(accountId);
+    res.json(details);
+  } catch (err) {
+    console.error("[LBH] Account details error:", err.message);
+    res.status(500).json({ error: "Failed to fetch account details" });
+  }
+});
+
+/**
  * POST /api/identity/setup-token
  * One-time: deploy the LBH Identity HTS token
  * Protect this route with your platform's admin auth middleware before mounting.
