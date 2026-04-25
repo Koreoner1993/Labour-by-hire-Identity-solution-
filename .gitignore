@@ -1,0 +1,28 @@
+# Environment secrets — never commit
+.env
+.env.local
+.env.*.local
+
+# Dependencies
+node_modules/
+
+# Lock files (commit package-lock.json but not yarn/pnpm variants)
+yarn.lock
+pnpm-lock.yaml
+
+# Build output
+dist/
+build/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
