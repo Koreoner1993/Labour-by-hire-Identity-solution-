@@ -21,14 +21,18 @@ const {
   TokenAssociateTransaction,
   TransferTransaction,
   TokenFreezeTransaction,
+  TokenUnfreezeTransaction,
   TokenType,
   TokenSupplyType,
   CustomRoyaltyFee,
+  AccountCreateTransaction,
   Hbar,
 } = require("@hashgraph/sdk");
 
 const { NFTStorage, File } = require("nft.storage");
 const crypto = require("crypto");
+
+const HEDERA_ACCOUNT_RE = /^\d+\.\d+\.\d+$/;
 
 // ─── SVG Avatar ─────────────────────────────────────────────────────────────
 
@@ -269,24 +273,14 @@ class HederaNFTService {
     await (await assocTx.execute(this.client)).getReceipt(this.client);
     console.log(`[LBH] Token associated with ${tradieAccountId}`);
 
-    // 2. Unfreeze the specific account temporarily to allow mint transfer
-    //    (treasury is exempt, but tradie account needs unfreeze for initial receive)
-    const unfreezeTx = await new TokenFreezeTransaction()
-      .setAccountId(tradieAccountId)
-      .setTokenId(this.tokenId)
-      .freezeWith(this.client)
-      .sign(this.operatorKey);
-    // Note: we actually need TokenUnfreezeTransaction for this step
-    // Using raw approach below for clarity
-    const { TokenUnfreezeTransaction } = require("@hashgraph/sdk");
-
-    const unfreezeActual = await new TokenUnfreezeTransaction()
+    // 2. Unfreeze the specific account temporarily to allow initial NFT transfer
+    const unfreezeTx = await new TokenUnfreezeTransaction()
       .setAccountId(tradieAccountId)
       .setTokenId(this.tokenId)
       .freezeWith(this.client)
       .sign(this.operatorKey);
 
-    await (await unfreezeActual.execute(this.client)).getReceipt(this.client);
+    await (await unfreezeTx.execute(this.client)).getReceipt(this.client);
 
     // 3. Transfer NFT from treasury to tradie
     const transferTx = await new TransferTransaction()
@@ -400,6 +394,9 @@ class LBHIdentityService {
 
     const identity = {
       tradie_id: tradie.id,
+      name: tradie.name,
+      abn: tradie.abn,
+      role: tradie.role,
       did,
       did_topic_id: topicId,
       hedera_account_id: tradieAccountId,
@@ -432,13 +429,19 @@ class LBHIdentityService {
 
     const url = `${mirrorBase}/api/v1/accounts/${hederaAccountId}/nfts?token.id=${tid}`;
     const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`Mirror node error: ${res.status} ${res.statusText}`);
+    }
     const data = await res.json();
 
-    if (!data.nfts || data.nfts.length === 0) {
+    if (!Array.isArray(data.nfts) || data.nfts.length === 0) {
       return { verified: false, reason: "No LBH identity NFT found" };
     }
 
     const nft = data.nfts[0];
+    if (!nft.metadata) {
+      return { verified: false, reason: "NFT has no metadata" };
+    }
     const metadataUri = Buffer.from(nft.metadata, "base64").toString();
 
     // Fetch metadata from IPFS gateway
@@ -447,6 +450,9 @@ class LBHIdentityService {
       "https://nftstorage.link/ipfs/"
     );
     const metaRes = await fetch(ipfsGateway);
+    if (!metaRes.ok) {
+      throw new Error(`IPFS gateway error: ${metaRes.status} ${metaRes.statusText}`);
+    }
     const metadata = await metaRes.json();
 
     return {
@@ -512,14 +518,48 @@ class LBHIdentityService {
   }
 
   /**
+   * Fetch account details from the Hedera mirror node
+   * Returns balance, EVM address, key type, and metadata
+   */
+  async getAccountDetails(hederaAccountId) {
+    if (!HEDERA_ACCOUNT_RE.test(hederaAccountId)) {
+      throw new Error("Invalid Hedera account ID format (expected shard.realm.num)");
+    }
+
+    const network = process.env.HEDERA_NETWORK || "testnet";
+    const mirrorBase =
+      network === "mainnet"
+        ? "https://mainnet-public.mirrornode.hedera.com"
+        : "https://testnet.mirrornode.hedera.com";
+
+    const res = await fetch(`${mirrorBase}/api/v1/accounts/${hederaAccountId}`);
+    if (!res.ok) {
+      throw new Error(`Mirror node error: ${res.status} ${res.statusText}`);
+    }
+    const data = await res.json();
+
+    const TINYBARS_PER_HBAR = 100_000_000;
+    const balanceTinybars = data.balance?.balance ?? 0;
+
+    return {
+      account_id: data.account,
+      evm_address: data.evm_address || null,
+      balance_hbar: balanceTinybars / TINYBARS_PER_HBAR,
+      balance_tinybars: balanceTinybars,
+      key_type: data.key?._type || null,
+      key_hex: data.key?.key || null,
+      memo: data.memo || null,
+      created_timestamp: data.created_timestamp || null,
+      deleted: data.deleted ?? false,
+      tokens: data.balance?.tokens ?? [],
+    };
+  }
+
+  /**
    * Create a dormant Hedera account for the tradie
    * Funded with minimum HBAR to cover token associations
    */
   async createDormantAccount(publicKey) {
-    const {
-      AccountCreateTransaction,
-    } = require("@hashgraph/sdk");
-
     const tx = await new AccountCreateTransaction()
       .setKey(publicKey)
       .setInitialBalance(new Hbar(1)) // ~0.13 AUD — covers associations
